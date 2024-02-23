@@ -743,6 +743,21 @@ pub struct RapValueIterator<'a> {
 }
 
 impl<'a> RapValueIterator<'a> {
+    /// 観測値を走査して返すイテレーターを構築する。
+    ///
+    /// 引数`reader`が示すRAPファイル・リーダーの読み込み位置が、圧縮データの先頭位置になっていることを想定している。
+    ///
+    /// # 引数
+    ///
+    /// * `reader` - RAPファイル・リーダー
+    /// * `compressed_data_bytes` - 圧縮データ全体のバイト数
+    /// * `max_latitude` - 観測範囲の最北西端の緯度（10e-6度単位）
+    /// * `min_longitude` - 観測範囲の最北西端の経度（10e-6度単位）
+    /// * `number_of_h_grids` - 観測範囲の緯度方向の格子数
+    /// * `grid_height` - 格子の高さ（10e-6度単位）
+    /// * `grid_width` - 格子の幅（10e-6度単位）
+    /// * `precipitation_by_levels` - レベルごとの観測値
+    /// * `level_repetitions` - レベルと反復数の組み合わせ
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader: FileReader,
