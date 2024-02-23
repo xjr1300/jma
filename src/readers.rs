@@ -1,6 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use time::{Date, Month, PrimitiveDateTime, Time};
 
@@ -10,7 +11,7 @@ type FileReader = BufReader<File>;
 #[derive(Debug)]
 pub struct RapReader {
     /// パス
-    path: PathBuf,
+    path: Rc<PathBuf>,
     /// コメント
     comment_part: CommentPart,
     /// データ部へのインデックス
@@ -37,10 +38,10 @@ impl RapReader {
     where
         P: AsRef<Path>,
     {
-        let path = path.as_ref().to_owned();
+        let path = Rc::new(path.as_ref().to_owned());
         let file = OpenOptions::new()
             .read(true)
-            .open(path.clone())
+            .open(Rc::clone(&path).as_path())
             .map_err(|e| RapReaderError::Open(format!("{e}")))?;
         let mut reader = BufReader::new(file);
         let comment_part = read_comment_part(&mut reader)?;
@@ -149,7 +150,7 @@ impl RapReader {
 
         let file = OpenOptions::new()
             .read(true)
-            .open(self.path.clone())
+            .open(Rc::clone(&self.path).as_path())
             .map_err(|e| RapReaderError::Open(format!("{e}")))?;
         let mut reader = BufReader::new(file);
         reader
