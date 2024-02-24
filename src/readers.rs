@@ -18,7 +18,7 @@ pub struct RapReader {
     data_index_part: DataIndexPart,
     /// 格子系定義
     grid_definition_part: GridDefinitionPart,
-    /// 圧縮方法、雨量値表
+    /// 圧縮方法、観測値表
     compression_part: CompressionPart,
     /// レベル反復数表
     level_repetitions_part: LevelRepetitionsPart,
@@ -60,83 +60,105 @@ impl RapReader {
         })
     }
 
+    /// 管理部 - コメント - 識別子を返す。
     pub fn identifier(&self) -> &str {
         &self.comment_part.identifier
     }
 
+    /// 管理部 - コメント - 版番号を返す。
     pub fn version(&self) -> &str {
         &self.comment_part.version
     }
 
+    /// 管理部 - コメント - 作成者コメントを返す。
     pub fn creator_comment(&self) -> &str {
         &self.comment_part.creator_comment
     }
 
+    /// 管理部 - データ部へのインデックス - データ数を返す。
     pub fn number_of_data(&self) -> u32 {
         self.data_index_part.number_of_data as u32
     }
 
+    /// 記録しているデータの属性を格納したスライスを返す。
+    ///
+    /// RAPファイルは、1つのファイルに1日分のデータを記録している。
+    /// 1つのファイルには、1時間間隔で観測した24データ、または30分間隔で観測した48データが
+    /// 記録されている。
+    /// データ数は、`number_of_data`メソッドで確認できる。
     pub fn data_properties(&self) -> &[DataProperty] {
         &self.data_index_part.data_properties
     }
 
+    /// 管理部 - 格子系定義 - 地図種別を返す。
     pub fn map_type(&self) -> u16 {
         self.grid_definition_part.map_type
     }
 
+    /// 管理部 - 格子系定義 - 最北西端の緯度を10e-6度単位で返す。
     pub fn grid_start_latitude(&self) -> u32 {
         self.grid_definition_part.start_grid_latitude
     }
 
+    /// 管理部 - 格子系定義 - 最北西端の経度を10e-6度単位で返す。
     pub fn grid_start_longitude(&self) -> u32 {
         self.grid_definition_part.start_grid_longitude
     }
 
+    /// 管理部 - 格子系定義 - 格子の幅を10e-6度単位で返す。
     pub fn grid_width(&self) -> u32 {
         self.grid_definition_part.grid_width
     }
 
+    /// 管理部 - 格子系定義 - 格子の高さを10e-6度単位で返す。
     pub fn grid_height(&self) -> u32 {
         self.grid_definition_part.grid_height
     }
 
+    /// 管理部 - 格子系定義 - 観測範囲の経度方向の格子数を返す。
     pub fn number_of_h_grids(&self) -> u32 {
         self.grid_definition_part.number_of_h_grids
     }
 
+    /// 管理部 - 格子系定義 - 観測範囲の緯度方向の格子数を返す。
     pub fn number_of_v_grids(&self) -> u32 {
         self.grid_definition_part.number_of_v_grids
     }
 
+    /// 管理部 - 圧縮方法、観測値表 - 圧縮方法を返す。
     pub fn compression_method(&self) -> u16 {
         self.compression_part.compression_method
     }
 
+    /// 管理部 - 圧縮方法、観測値表 - レベルの数を返す。
     pub fn number_of_levels(&self) -> u16 {
         self.compression_part.number_of_levels
     }
 
+    /// 管理部 - 圧縮方法、観測値表 - レベル別の観測値を返す。
     pub fn precipitation_by_levels(&self) -> &[u16] {
         &self.compression_part.precipitation_by_levels
     }
 
+    /// 管理部 - レベル、反復数表 - レベルと反復数の組み合わせの数を返す。
     pub fn number_of_level_repetitions(&self) -> u16 {
         self.level_repetitions_part.number_of_level_repetitions
     }
 
+    /// 管理部 - レベル、反復数表 - レベルと反復数の組み合わせを返す。
     pub fn level_repetitions(&self) -> &[LevelRepetition] {
         &self.level_repetitions_part.level_repetitions
     }
 
-    /// 引数で指定された日時の観測値データの属性を返却する。
+    /// 引数で指定された日時の観測データの属性を返却する。
     ///
     /// # 引数
     ///
-    /// * `dt` - 観測値データの属性を取得したい日時
+    /// * `dt` - 観測データの属性を取得したい日時
     ///
     /// # 戻り値
     ///
-    /// 観測値データの属性を格納した`DataAttribute`
+    /// 観測データの属性を格納した`DataAttribute`
     pub fn retrieve_observation_data(
         &mut self,
         dt: PrimitiveDateTime,
@@ -196,7 +218,7 @@ impl RapReader {
             ))
         })?;
 
-        // 観測値を順に走査して返すイテレーターを構築
+        // 観測値を記録順に走査して返すイテレーターを構築
         let value_iterator = RapValueIterator::new(
             reader,
             compressed_data_bytes as usize,
@@ -223,13 +245,13 @@ impl RapReader {
 #[derive(Debug, Clone)]
 struct CommentPart {
     /// 識別子
-    pub(crate) identifier: String,
+    identifier: String,
 
     /// 版番号
-    pub(crate) version: String,
+    version: String,
 
     /// 作成者コメント
-    pub(crate) creator_comment: String,
+    creator_comment: String,
 }
 
 /// データ部へのインデックス
@@ -252,10 +274,10 @@ struct DataIndexPart {
     ///
     /// データ数が24の場合は、毎正時に観測したデータを記録したファイルを示し、
     /// データ数が48の場合は、30分毎に観測したデータを記録したファイルを示す。
-    pub(crate) number_of_data: ObservationTimes,
+    number_of_data: ObservationTimes,
 
     /// データの属性
-    pub(crate) data_properties: Vec<DataProperty>,
+    data_properties: Vec<DataProperty>,
 }
 
 /// 格子系定義
@@ -264,42 +286,41 @@ struct GridDefinitionPart {
     /// 地図種別
     ///
     /// 1: 解析雨量
-    pub(crate) map_type: u16,
+    map_type: u16,
 
     /// 最初の緯度と軽度
     ///
-    /// 0.000001度単位で表現する。
+    /// 10e-6度単位で表現する。
     /// 最初のデータは観測範囲の北西端である。
     /// 最初のデータ以後は、経度方向に西から東にデータが記録され、東端に達したとき、
     /// 格子1つ分だけ南で、西端の格子のデータが記録されている。
-    pub(crate) start_grid_latitude: u32,
-    pub(crate) start_grid_longitude: u32,
+    start_grid_latitude: u32,
+    start_grid_longitude: u32,
 
     /// 横方向と縦方向の格子間隔
     ///
-    /// 0.000001度単位で表現する。
-    pub(crate) grid_width: u32,
-    pub(crate) grid_height: u32,
+    /// 10e-6度単位で表現する。
+    grid_width: u32,
+    grid_height: u32,
 
     /// 横方向と縦方向の格子数
     pub(crate) number_of_h_grids: u32,
     pub(crate) number_of_v_grids: u32,
 }
 
-/// 圧縮方法、雨量値表
+/// 圧縮方法、観測値表
 #[derive(Debug, Clone)]
 struct CompressionPart {
     /// 圧縮方法
-    pub(crate) compression_method: u16,
+    compression_method: u16,
 
     /// レベル数
-    pub(crate) number_of_levels: u16,
+    number_of_levels: u16,
 
-    /// レベル毎の雨量
+    /// レベル毎の観測値
     ///
-    /// 雨量は0.1mm単位で記録されている。
     /// レベルは`Vec`のインデックスを示す。
-    pub(crate) precipitation_by_levels: Vec<u16>,
+    precipitation_by_levels: Vec<u16>,
 }
 
 /// レベルと反復数
@@ -310,7 +331,7 @@ pub struct LevelRepetition {
 
     /// 反復数
     ///
-    /// 記録されている値は、実際の反復数より２少ない数を格納している。
+    /// 記録されている値は、実際の反復数より2少ない数を格納している。
     pub repetition: u8,
 }
 
@@ -639,7 +660,7 @@ where
 {
     let compression_method = read_u16(reader).map_err(|e| {
         RapReaderError::Unexpected(format!(
-            "圧縮方法・雨量値表の圧縮方法の読み込みに失敗しました。{e}"
+            "圧縮方法・観測値表の圧縮方法の読み込みに失敗しました。{e}"
         ))
     })?;
     if compression_method != COMPRESSION_METHOD {
@@ -649,14 +670,14 @@ where
     }
     let number_of_levels = read_u16(reader).map_err(|e| {
         RapReaderError::Unexpected(format!(
-            "圧縮方法・雨量値表のレベル数の読み込みに失敗しました。{e}"
+            "圧縮方法・観測値表のレベル数の読み込みに失敗しました。{e}"
         ))
     })?;
     let mut preps_by_levels = vec![0u16, number_of_levels];
     for prep in preps_by_levels.iter_mut() {
         *prep = read_u16(reader).map_err(|e| {
             RapReaderError::Unexpected(format!(
-                "圧縮方法・雨量値表のレベルごとの雨量値の読み込みに失敗しました。{e}"
+                "圧縮方法・観測値表のレベルごとの観測値の読み込みに失敗しました。{e}"
             ))
         })?;
     }
@@ -724,8 +745,8 @@ pub struct RapValueIterator<'a> {
     /// 格子の幅（10e-6度単位）
     grid_width: u32,
 
-    /// レベル別雨量
-    precipitation_by_levels: &'a [u16],
+    /// レベルごとの観測値
+    value_by_levels: &'a [u16],
     /// レベル反復数表
     level_repetitions: &'a [LevelRepetition],
 
@@ -757,7 +778,7 @@ impl<'a> RapValueIterator<'a> {
     /// * `number_of_h_grids` - 観測範囲の緯度方向の格子数
     /// * `grid_height` - 格子の高さ（10e-6度単位）
     /// * `grid_width` - 格子の幅（10e-6度単位）
-    /// * `precipitation_by_levels` - レベルごとの観測値
+    /// * `value_by_levels` - レベルごとの観測値
     /// * `level_repetitions` - レベルと反復数の組み合わせ
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -768,7 +789,7 @@ impl<'a> RapValueIterator<'a> {
         number_of_h_grids: u32,
         grid_height: u32,
         grid_width: u32,
-        precipitation_by_levels: &'a [u16],
+        value_by_levels: &'a [u16],
         level_repetitions: &'a [LevelRepetition],
     ) -> Self {
         Self {
@@ -778,7 +799,7 @@ impl<'a> RapValueIterator<'a> {
             number_of_h_grids,
             grid_height,
             grid_width,
-            precipitation_by_levels,
+            value_by_levels,
             level_repetitions,
             read_bytes: 0,
             current_lat: max_latitude,
