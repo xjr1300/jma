@@ -175,6 +175,8 @@ impl RapReader {
             .open(Rc::clone(&self.path).as_path())
             .map_err(|e| RapReaderError::Open(format!("{e}")))?;
         let mut reader = BufReader::new(file);
+
+        // 引数の日時のデータが記録されている位置まで、ファイルの読み込み位置を移動
         reader
             .seek(SeekFrom::Start(data_property.data_start_position as u64))
             .map_err(|e| {
@@ -217,6 +219,15 @@ impl RapReader {
                 "データ部の解析に使用したアメダスの総数の読み込みに失敗しました。{e}"
             ))
         })?;
+
+        // 圧縮データの開始位置にファイルの読み込み位置を移動
+        reader
+            .seek(SeekFrom::Start(compressed_data_start_position))
+            .map_err(|e| {
+                RapReaderError::Unexpected(format!(
+                    "圧縮データの開始位置にファイルの読み込み位置を移動できませんでした。{e}"
+                ))
+            })?;
 
         // 観測値を記録順に走査して返すイテレーターを構築
         let value_iterator = RapValueIterator::new(
