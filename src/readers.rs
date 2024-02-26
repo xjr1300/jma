@@ -116,12 +116,12 @@ impl RapReader {
     }
 
     /// 管理部 - 格子系定義 - 観測範囲の経度方向の格子数を返す。
-    pub fn number_of_h_grids(&self) -> u32 {
+    pub fn number_of_h_grids(&self) -> u16 {
         self.grid_definition_part.number_of_h_grids
     }
 
     /// 管理部 - 格子系定義 - 観測範囲の緯度方向の格子数を返す。
-    pub fn number_of_v_grids(&self) -> u32 {
+    pub fn number_of_v_grids(&self) -> u16 {
         self.grid_definition_part.number_of_v_grids
     }
 
@@ -136,8 +136,8 @@ impl RapReader {
     }
 
     /// 管理部 - 圧縮方法、観測値表 - レベル別の観測値を返す。
-    pub fn precipitation_by_levels(&self) -> &[u16] {
-        &self.compression_part.precipitation_by_levels
+    pub fn value_by_levels(&self) -> &[u16] {
+        &self.compression_part.value_by_levels
     }
 
     /// 管理部 - レベル、反復数表 - レベルと反復数の組み合わせの数を返す。
@@ -227,7 +227,7 @@ impl RapReader {
             self.number_of_h_grids(),
             self.grid_height(),
             self.grid_width(),
-            self.precipitation_by_levels(),
+            self.value_by_levels(),
             self.level_repetitions(),
         );
 
@@ -304,8 +304,8 @@ struct GridDefinitionPart {
     grid_height: u32,
 
     /// 横方向と縦方向の格子数
-    pub(crate) number_of_h_grids: u32,
-    pub(crate) number_of_v_grids: u32,
+    pub(crate) number_of_h_grids: u16,
+    pub(crate) number_of_v_grids: u16,
 }
 
 /// 圧縮方法、観測値表
@@ -320,7 +320,7 @@ struct CompressionPart {
     /// レベル毎の観測値
     ///
     /// レベルは`Vec`のインデックスを示す。
-    precipitation_by_levels: Vec<u16>,
+    value_by_levels: Vec<u16>,
 }
 
 /// レベルと反復数
@@ -498,7 +498,9 @@ where
     let month = read_u8(reader)
         .map_err(|e| RapReaderError::Unexpected(format!("観測月の読み込みに失敗しました。{e}")))?;
     let month_enum = Month::try_from(month).map_err(|e| {
-        RapReaderError::Unexpected(format!("ファイルに記録されている月が不正です。{e}"))
+        RapReaderError::Unexpected(format!(
+            "ファイルに記録されている月({month})が不正です。{e}"
+        ))
     })?;
     let day = read_u8(reader)
         .map_err(|e| RapReaderError::Unexpected(format!("観測日の読み込みに失敗しました。{e}")))?;
@@ -580,7 +582,7 @@ where
                 "データ部へのインデックスの要素の読み込みに失敗しました。{e}"
             ))
         })?;
-        reader.seek(SeekFrom::Current(88)).map_err(|e| {
+        reader.seek(SeekFrom::Current(8)).map_err(|e| {
             RapReaderError::Unexpected(format!(
                 "データ部へのインデックスの予備のシークに失敗しました。{e}"
             ))
@@ -611,12 +613,12 @@ where
     if map_type != MAP_TYPE {
         return Err(RapReaderError::MapTypeUnsupported(map_type));
     }
-    let grid_start_latitude = read_u32(reader).map_err(|e| {
+    let start_grid_latitude = read_u32(reader).map_err(|e| {
         RapReaderError::Unexpected(format!(
             "格子系定義の最初のデータの緯度の読み込みに失敗しました。{e}"
         ))
     })?;
-    let grid_start_longitude = read_u32(reader).map_err(|e| {
+    let start_grid_longitude = read_u32(reader).map_err(|e| {
         RapReaderError::Unexpected(format!(
             "格子系定義の最初のデータの経度の読み込みに失敗しました。{e}"
         ))
@@ -629,12 +631,12 @@ where
             "格子系定義の格子の高さの読み込みに失敗しました。{e}"
         ))
     })?;
-    let number_of_h_grids = read_u32(reader).map_err(|e| {
+    let number_of_h_grids = read_u16(reader).map_err(|e| {
         RapReaderError::Unexpected(format!(
             "格子系定義の横方向の格子数の読み込みに失敗しました。{e}"
         ))
     })?;
-    let number_of_v_grids = read_u32(reader).map_err(|e| {
+    let number_of_v_grids = read_u16(reader).map_err(|e| {
         RapReaderError::Unexpected(format!(
             "格子系定義の縦方向の格子数の読み込みに失敗しました。{e}"
         ))
@@ -645,8 +647,8 @@ where
 
     Ok(GridDefinitionPart {
         map_type,
-        start_grid_latitude: grid_start_latitude,
-        start_grid_longitude: grid_start_longitude,
+        start_grid_latitude,
+        start_grid_longitude,
         grid_width,
         grid_height,
         number_of_h_grids,
@@ -673,8 +675,8 @@ where
             "圧縮方法・観測値表のレベル数の読み込みに失敗しました。{e}"
         ))
     })?;
-    let mut preps_by_levels = vec![0u16, number_of_levels];
-    for prep in preps_by_levels.iter_mut() {
+    let mut value_by_levels = vec![0u16, number_of_levels];
+    for prep in value_by_levels.iter_mut() {
         *prep = read_u16(reader).map_err(|e| {
             RapReaderError::Unexpected(format!(
                 "圧縮方法・観測値表のレベルごとの観測値の読み込みに失敗しました。{e}"
@@ -685,7 +687,7 @@ where
     Ok(CompressionPart {
         compression_method,
         number_of_levels,
-        precipitation_by_levels: preps_by_levels,
+        value_by_levels,
     })
 }
 
@@ -738,7 +740,7 @@ pub struct RapValueIterator<'a> {
     min_longitude: u32,
 
     /// 経度方向の格子数
-    number_of_h_grids: u32,
+    number_of_h_grids: u16,
 
     /// 格子の高さ（10e-6度単位）
     grid_height: u32,
@@ -757,7 +759,7 @@ pub struct RapValueIterator<'a> {
     /// 現在の経度（10e-6度単位）
     current_longitude: u32,
     /// 経度方向に格子を移動した回数
-    h_moving_times: u32,
+    h_moved_times: u16,
     /// 現在の観測値
     current_value: Option<u16>,
     /// 現在の観測値を繰り返す回数
@@ -786,7 +788,7 @@ impl<'a> RapValueIterator<'a> {
         compressed_data_bytes: usize,
         max_latitude: u32,
         min_longitude: u32,
-        number_of_h_grids: u32,
+        number_of_h_grids: u16,
         grid_height: u32,
         grid_width: u32,
         value_by_levels: &'a [u16],
@@ -804,7 +806,7 @@ impl<'a> RapValueIterator<'a> {
             read_bytes: 0,
             current_latitude: max_latitude,
             current_longitude: min_longitude,
-            h_moving_times: 0,
+            h_moved_times: 0,
             current_value: None,
             number_of_repetitions: 0,
         }
@@ -906,12 +908,12 @@ impl<'a> Iterator for RapValueIterator<'a> {
 
         // 格子を移動
         self.current_longitude += self.grid_width;
-        self.h_moving_times += 1;
+        self.h_moved_times += 1;
         // 経度方向の格子の数だけ緯度方向に移動した場合、現在の格子より1つ南で、最西端の格子に移動
-        if self.number_of_h_grids <= self.h_moving_times {
+        if self.number_of_h_grids <= self.h_moved_times {
             self.current_latitude -= self.grid_height;
             self.current_longitude = self.min_longitude;
-            self.h_moving_times = 0;
+            self.h_moved_times = 0;
         }
 
         // 現在の観測値を繰り返す回数を減らす
