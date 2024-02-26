@@ -753,15 +753,15 @@ pub struct RapValueIterator<'a> {
     /// 圧縮データを読み込んだバイト数
     read_bytes: usize,
     /// 現在の緯度（10e-6度単位）
-    current_lat: u32,
+    current_latitude: u32,
     /// 現在の経度（10e-6度単位）
-    current_lon: u32,
+    current_longitude: u32,
     /// 経度方向に格子を移動した回数
     h_moving_times: u32,
-    /// 現在の物理値
+    /// 現在の観測値
     current_value: Option<u16>,
-    /// 現在値を返却する回数
-    number_of_times_to_return: u32,
+    /// 現在の観測値を繰り返す回数
+    number_of_repetitions: u16,
 }
 
 impl<'a> RapValueIterator<'a> {
@@ -802,12 +802,65 @@ impl<'a> RapValueIterator<'a> {
             value_by_levels,
             level_repetitions,
             read_bytes: 0,
-            current_lat: max_latitude,
-            current_lon: min_longitude,
+            current_latitude: max_latitude,
+            current_longitude: min_longitude,
             h_moving_times: 0,
             current_value: None,
-            number_of_times_to_return: 0,
+            number_of_repetitions: 0,
         }
+    }
+
+    /// ランレングス圧縮バイトを読み込み。
+    fn read_run_length_byte(&mut self) -> RapReaderResult<u8> {
+        let mut buf = [0u8; 1];
+        self.reader.read_exact(&mut buf).map_err(|e| {
+            RapReaderError::Unexpected(format!("データ部の読み込みに失敗しました。{e}"))
+        })?;
+        self.read_bytes += 1;
+
+        Ok(buf[0])
+    }
+
+    /// 圧縮された測定値を読み込む。
+    fn expand_run_length(&mut self) -> RapReaderResult<ExpandedValue> {
+        // 1バイト読み込み
+        let buf = self.read_run_length_byte()?;
+        let expanded_value = if buf & 0x80 == 0x00 {
+            // レベル・反復表によるランレングス圧縮(a)
+            let lr = self.level_repetitions[buf as usize];
+            ExpandedValue {
+                value: self.value_by_levels[lr.level as usize],
+                number_of_repetitions: lr.repetition as u16 + 2,
+            }
+        } else if buf & 0xE0 == 0xC0 {
+            // レベル反復表によらないランレングス圧縮(b)
+            let value = self.value_by_levels[(buf & 0x1F) as usize];
+            let number_of_repetitions = self.read_run_length_byte()? as u16 + 2;
+            ExpandedValue {
+                value,
+                number_of_repetitions,
+            }
+        } else if buf & 0xC0 == 0x80 {
+            // 頻度が多い単独のレベル値(c)
+            let value = self.value_by_levels[(buf & 0x3F) as usize];
+            ExpandedValue {
+                value,
+                number_of_repetitions: 1,
+            }
+        } else if buf == 0xFE {
+            // 頻度が少ない単独のレベル値(d)
+            let level = self.read_run_length_byte()? as usize;
+            ExpandedValue {
+                value: self.value_by_levels[level],
+                number_of_repetitions: 1,
+            }
+        } else {
+            return Err(RapReaderError::Unexpected(format!(
+                "データ部に判別できないバイトが見つかりました。`0x{buf:x}"
+            )));
+        };
+
+        Ok(expanded_value)
     }
 }
 
@@ -825,36 +878,52 @@ impl<'a> Iterator for RapValueIterator<'a> {
     type Item = RapReaderResult<LocationValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // 返却回数が0かつ、圧縮データのバイト数読み込んだ場合は終了
-        if self.number_of_times_to_return == 0 && self.compressed_data_bytes <= self.read_bytes {
+        // 現在の観測値の繰り返し回数が0かつ、すべての圧縮データを読み込んだ場合は終了
+        if self.number_of_repetitions == 0 && self.compressed_data_bytes <= self.read_bytes {
             return None;
         }
 
-        // 返却回数が0の場合、圧縮データを読み込み
-        if self.number_of_times_to_return == 0 {
-            todo!()
+        // 現在の観測値の繰り返し回数が0の場合、圧縮データを読み込み
+        if self.number_of_repetitions == 0 {
+            let ev = match self.expand_run_length() {
+                Ok(ev) => ev,
+                Err(e) => return Some(Err(e)),
+            };
+            self.current_value = if ev.value < u16::MAX {
+                Some(ev.value)
+            } else {
+                None
+            };
+            self.number_of_repetitions = ev.number_of_repetitions;
         }
 
         // 結果を生成
         let result = Some(Ok(LocationValue {
-            latitude: self.current_lat as f64 / 1_000_000.0,
-            longitude: self.current_lon as f64 / 1_000_000.0,
+            latitude: self.current_latitude as f64 / 1_000_000.0,
+            longitude: self.current_longitude as f64 / 1_000_000.0,
             value: self.current_value,
         }));
 
         // 格子を移動
-        self.current_lon += self.grid_width;
+        self.current_longitude += self.grid_width;
         self.h_moving_times += 1;
         // 経度方向の格子の数だけ緯度方向に移動した場合、現在の格子より1つ南で、最西端の格子に移動
         if self.number_of_h_grids <= self.h_moving_times {
-            self.current_lat -= self.grid_height;
-            self.current_lon = self.min_longitude;
+            self.current_latitude -= self.grid_height;
+            self.current_longitude = self.min_longitude;
             self.h_moving_times = 0;
         }
 
-        // 現在値を返す回数を減らす
-        self.number_of_times_to_return -= 1;
+        // 現在の観測値を繰り返す回数を減らす
+        self.number_of_repetitions -= 1;
 
         result
     }
+}
+
+struct ExpandedValue {
+    /// 観測値
+    value: u16,
+    /// 観測値を返却する回数
+    number_of_repetitions: u16,
 }
