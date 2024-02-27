@@ -1,1 +1,6 @@
 /target
+*.csv
+J1991101.bin
+J1991101.txt
+a.out
+unpack.c
