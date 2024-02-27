@@ -165,10 +165,7 @@ impl RapReader {
     /// # 戻り値
     ///
     /// 観測データの属性を格納した`DataAttribute`
-    pub fn value_iterator(
-        &mut self,
-        dt: PrimitiveDateTime,
-    ) -> RapReaderResult<RapValueIterator<'_>> {
+    pub fn value_iterator(&self, dt: PrimitiveDateTime) -> RapReaderResult<RapValueIterator<'_>> {
         let dp = self
             .data_index_part
             .data_properties
@@ -1061,4 +1058,63 @@ where
     }
 
     Ok(())
+}
+
+/// ジオメトリ付きCSVファイルを出力する。
+///
+/// # 引数
+///
+/// * `iterator` - 観測値を順に取り出すイテレーター
+pub fn output_csv_with_geom<W>(
+    writer: &mut W,
+    iterator: RapValueIterator,
+    grid_width: f64,
+    grid_height: f64,
+) -> std::io::Result<()>
+where
+    W: Write,
+{
+    writeln!(writer, "longitude,latitude,value,geom")?;
+    for lv in iterator.flatten() {
+        let value_str = match lv.value {
+            Some(value) => value.to_string(),
+            None => String::new(),
+        };
+        let wkt = grid_wkt(lv.longitude, lv.latitude, grid_width, grid_height);
+        writeln!(
+            writer,
+            "{},{},{},\"{}\"",
+            lv.longitude, lv.latitude, value_str, wkt
+        )?;
+    }
+    writer.flush()?;
+
+    Ok(())
+}
+
+/// 格子を表現するOGC Well-known Textを返す。
+///
+/// # 引数
+///
+/// * `longitude` - 格子の中心の経度（度）
+/// * `latitude` - 格子の中心の経度（度）
+/// * `width` - 格子の幅（度）
+/// * `height` - 格子の高さ（度）
+///
+/// # 戻り値
+///
+/// 格子を表現するOGC Well-known TEXT
+fn grid_wkt(longitude: f64, latitude: f64, width: f64, height: f64) -> String {
+    let width_2 = width / 2.0;
+    let height_2 = height / 2.0;
+    let min_longitude = longitude - width_2;
+    let max_longitude = longitude + width_2;
+    let max_latitude = latitude + height_2;
+    let min_latitude = latitude - height_2;
+
+    // 左上、右上、右下、左下、左上の順にポリゴンの座標を並べる
+    format!(
+        "POLYGON(({0} {3},{2} {3},{2} {1},{0} {1}, {0} {3}))",
+        min_longitude, min_latitude, max_longitude, max_latitude
+    )
 }
