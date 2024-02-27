@@ -1,11 +1,17 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use time::format_description::FormatItem;
+use time::macros::format_description;
 use time::{Date, Month, PrimitiveDateTime, Time};
 
 type FileReader = BufReader<File>;
+
+/// 日時の書式
+const DATETIME_FMT: &[FormatItem<'_>] =
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
 /// `RapReader`
 #[derive(Debug)]
@@ -159,11 +165,11 @@ impl RapReader {
     /// # 戻り値
     ///
     /// 観測データの属性を格納した`DataAttribute`
-    pub fn retrieve_observation_data(
+    pub fn value_iterator(
         &mut self,
         dt: PrimitiveDateTime,
-    ) -> RapReaderResult<DataPart<'_>> {
-        let data_property = self
+    ) -> RapReaderResult<RapValueIterator<'_>> {
+        let dp = self
             .data_index_part
             .data_properties
             .iter()
@@ -176,63 +182,19 @@ impl RapReader {
             .map_err(|e| RapReaderError::Open(format!("{e}")))?;
         let mut reader = BufReader::new(file);
 
-        // 引数の日時のデータが記録されている位置まで、ファイルの読み込み位置を移動
+        // 引数の日時の圧縮データが記録されている位置まで、ファイルの読み込み位置を移動
         reader
-            .seek(SeekFrom::Start(data_property.data_start_position as u64))
+            .seek(SeekFrom::Start(dp.data_start_position as u64 + 4))
             .map_err(|e| {
                 RapReaderError::Unexpected(format!(
-                    "データが記録されている位置へのシークに失敗しました。{e}"
-                ))
-            })?;
-
-        self.read_observation_data_part(reader)
-    }
-
-    fn read_observation_data_part(&self, mut reader: FileReader) -> RapReaderResult<DataPart<'_>> {
-        let compressed_data_bytes = read_u32(&mut reader).map_err(|e| {
-            RapReaderError::Unexpected(format!(
-                "データ部のデータ圧縮後のサイズの読み込みに失敗しました。{e}"
-            ))
-        })?;
-        let compressed_data_start_position = reader.get_mut().stream_position().map_err(|e| {
-            RapReaderError::Unexpected(format!(
-                "圧縮されたデータの開始位置を取得できませんでした。{e}"
-            ))
-        })?;
-        reader
-            .seek(SeekFrom::Current(compressed_data_bytes as i64))
-            .map_err(|e| {
-                RapReaderError::Unexpected(format!(
-                    "データ部の圧縮データのシークに失敗しました。{e}"
-                ))
-            })?;
-        let mut radar_operation_statuses = [0u8; 8];
-        reader
-            .read_exact(&mut radar_operation_statuses)
-            .map_err(|e| {
-                RapReaderError::Unexpected(format!(
-                    "データ部のレーダー運用状況の読み込みに失敗しました。{e}"
-                ))
-            })?;
-        let number_of_amedases = read_u32(reader.get_mut()).map_err(|e| {
-            RapReaderError::Unexpected(format!(
-                "データ部の解析に使用したアメダスの総数の読み込みに失敗しました。{e}"
-            ))
-        })?;
-
-        // 圧縮データの開始位置にファイルの読み込み位置を移動
-        reader
-            .seek(SeekFrom::Start(compressed_data_start_position))
-            .map_err(|e| {
-                RapReaderError::Unexpected(format!(
-                    "圧縮データの開始位置にファイルの読み込み位置を移動できませんでした。{e}"
+                    "圧縮データが記録されている位置へのシークに失敗しました。{e}"
                 ))
             })?;
 
         // 観測値を記録順に走査して返すイテレーターを構築
-        let value_iterator = RapValueIterator::new(
+        Ok(RapValueIterator::new(
             reader,
-            compressed_data_bytes as usize,
+            dp.compressed_data_size as usize,
             self.grid_start_latitude(),
             self.grid_start_longitude(),
             self.number_of_h_grids(),
@@ -240,15 +202,22 @@ impl RapReader {
             self.grid_width(),
             self.value_by_levels(),
             self.level_repetitions(),
-        );
+        ))
+    }
 
-        Ok(DataPart {
-            compressed_data_bytes,
-            compressed_data_start_position,
-            value_iterator,
-            radar_operation_statuses,
-            number_of_amedases,
-        })
+    /// ファイルの情報を整形して出力する。
+    ///
+    /// # 引数
+    ///
+    /// * `writer` - ファイルの情報を出力するライター
+    pub fn pretty_print<W>(&self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: Write,
+    {
+        print_management_part(writer, self)?;
+        print_data_part(writer, self.data_properties())?;
+
+        Ok(())
     }
 }
 
@@ -269,13 +238,39 @@ struct CommentPart {
 #[derive(Debug, Clone, Copy)]
 pub struct DataProperty {
     /// 観測日時
+    ///
+    /// RAPファイルには、0時から1時までのデータは、1時として記録されている。
+    /// よって、24観測データが記録されているRAPファイルに記録されている観測日時は、
+    /// 1時から翌日の0時の範囲である。
     pub observation_date_time: PrimitiveDateTime,
 
     /// 観測要素
     pub observation_element: u16,
 
-    /// 最初のデータが記録されているファイルの先頭からのバイト位置
+    /// 観測日時の観測データが記録されているファイルの先頭からのバイト位置
     pub data_start_position: u32,
+
+    /// 圧縮した観測データのサイズ
+    pub compressed_data_size: u32,
+
+    /// レーダー運用状況
+    pub radar_operation_statuses: u64,
+
+    /// 解析に使用したアメダスの総数
+    pub number_of_amedas: u32,
+}
+
+impl Default for DataProperty {
+    fn default() -> Self {
+        Self {
+            observation_date_time: PrimitiveDateTime::MIN,
+            observation_element: Default::default(),
+            data_start_position: Default::default(),
+            compressed_data_size: Default::default(),
+            radar_operation_statuses: Default::default(),
+            number_of_amedas: Default::default(),
+        }
+    }
 }
 
 /// データ部へのインデックス
@@ -357,28 +352,6 @@ struct LevelRepetitionsPart {
 
     // レベルと反復数の組み合わせ
     pub(crate) level_repetitions: Vec<LevelRepetition>,
-}
-
-/// データ部
-pub struct DataPart<'a> {
-    /// 圧縮後のデータのサイズ
-    pub compressed_data_bytes: u32,
-
-    /// 圧縮されたデータの開始位置
-    pub compressed_data_start_position: u64,
-
-    /// 観測値を順に走査して返すイテレーター
-    ///
-    /// 観測値を記録した格子は、最北西端から経度方向に向かって記録されている。
-    /// 格子がその緯度の最東端に達したとき、現在の格子の1つ南かつ、最西端の格子に移動する。
-    /// これを続けて最南東端の格子に移動する。
-    pub value_iterator: RapValueIterator<'a>,
-
-    /// レーダー運用状況
-    pub radar_operation_statuses: [u8; 8],
-
-    /// 解析に使用したアメダスの総数
-    pub number_of_amedases: u32,
 }
 
 /// 1日の観測回数
@@ -499,6 +472,7 @@ macro_rules! read_number {
 read_number!(read_u8, u8);
 read_number!(read_u16, u16);
 read_number!(read_u32, u32);
+read_number!(read_u64, u64);
 
 fn read_date_time<R>(reader: &mut R) -> RapReaderResult<PrimitiveDateTime>
 where
@@ -578,14 +552,7 @@ where
         ))
     })?;
     let number_of_data = ObservationTimes::try_from(number_of_data)?;
-    let mut data_properties = vec![
-        DataProperty {
-            observation_date_time: PrimitiveDateTime::MIN,
-            observation_element: 0,
-            data_start_position: 0,
-        };
-        number_of_data as usize
-    ];
+    let mut data_properties = vec![DataProperty::default(); number_of_data as usize];
     for data_property in data_properties.iter_mut() {
         data_property.observation_date_time = read_date_time(reader)?;
         data_property.observation_element = read_u16(reader).map_err(|e| {
@@ -601,6 +568,44 @@ where
         data_property.data_start_position = read_u32(reader).map_err(|e| {
             RapReaderError::Unexpected(format!(
                 "データ部へのインデックスのデータの開始位置の読み込みに失敗しました。{e}"
+            ))
+        })?;
+        // データ部に移動してデータ部に記録されている情報を取得
+        let position = reader.stream_position().map_err(|e| {
+            RapReaderError::Unexpected(format!(
+                "データ部へのインデックスのデータの終了位置の取得に失敗しました。{e}"
+            ))
+        })?;
+        reader
+            .seek(SeekFrom::Start(data_property.data_start_position as u64))
+            .map_err(|e| {
+                RapReaderError::Unexpected(format!("データ部の先頭に移動できませんでした。{e}"))
+            })?;
+        data_property.compressed_data_size = read_u32(reader).map_err(|e| {
+            RapReaderError::Unexpected(format!(
+                "データ部の圧縮後の大きさの読み込みに失敗しました。{e}"
+            ))
+        })?;
+        reader
+            .seek(SeekFrom::Current(data_property.compressed_data_size as i64))
+            .map_err(|e| {
+                RapReaderError::Unexpected(format!(
+                    "データ部の圧縮後のデータの末尾に移動できませんでした。{e}"
+                ))
+            })?;
+        data_property.radar_operation_statuses = read_u64(reader).map_err(|e| {
+            RapReaderError::Unexpected(format!(
+                "データ部のレーダー運用状況の読み込みに失敗しました。{e}"
+            ))
+        })?;
+        data_property.number_of_amedas = read_u32(reader).map_err(|e| {
+            RapReaderError::Unexpected(format!(
+                "データ部の解析に使用したアメダスの総数の読み込みに失敗しました。{e}"
+            ))
+        })?;
+        reader.seek(SeekFrom::Start(position)).map_err(|e| {
+            RapReaderError::Unexpected(format!(
+                "データ部へのインデックスのデータの終了位置に移動できませんでした。{e}"
             ))
         })?;
     }
@@ -686,7 +691,7 @@ where
             "圧縮方法・観測値表のレベル数の読み込みに失敗しました。{e}"
         ))
     })?;
-    let mut value_by_levels = vec![0u16, number_of_levels];
+    let mut value_by_levels = vec![0u16; number_of_levels as usize];
     for prep in value_by_levels.iter_mut() {
         *prep = read_u16(reader).map_err(|e| {
             RapReaderError::Unexpected(format!(
@@ -839,7 +844,7 @@ impl<'a> RapValueIterator<'a> {
         // 1バイト読み込み
         let buf = self.read_run_length_byte()?;
         let expanded_value = if buf & 0x80 == 0x00 {
-            // レベル・反復表によるランレングス圧縮(a)
+            // レベル反復表によるランレングス圧縮(a)
             let lr = self.level_repetitions[buf as usize];
             ExpandedValue {
                 value: self.value_by_levels[lr.level as usize],
@@ -884,6 +889,8 @@ pub struct LocationValue {
     /// 経度（度）
     pub longitude: f64,
     /// 観測値
+    ///
+    /// RAPファイルに欠測値は`0xFFFF`と記録されているが`None`を返す。
     pub value: Option<u16>,
 }
 
@@ -939,4 +946,119 @@ struct ExpandedValue {
     value: u16,
     /// 観測値を返却する回数
     number_of_repetitions: u16,
+}
+
+#[rustfmt::skip]
+fn print_management_part<W>(
+    writer: &mut W,
+    reader: &RapReader
+) -> std::io::Result<()>
+where
+    W: Write,
+{
+    writeln!(writer, "管理部 - コメント")?;
+    writeln!(writer, "    識別子: {}", reader.identifier())?;
+    writeln!(writer, "    版番号: {}", reader.version())?;
+    writeln!(writer, "    作成者コメント: {}", reader.creator_comment())?;
+    writeln!(writer, "管理部 - データ部へのインデックス")?;
+    writeln!(writer, "    データ数: {}", reader.number_of_data())?;
+    print_data_properties(writer, reader.data_properties())?;
+    writeln!(writer, "管理部 - 格子系定義")?;
+    writeln!(writer, "    地図種別: {}", reader.map_type())?;
+    writeln!(writer, "    最北西端の緯度: {}", reader.grid_start_latitude())?;
+    writeln!(writer, "    最北西端の経度: {}", reader.grid_start_longitude())?;
+    writeln!(writer, "    格子の幅: {}", reader.grid_width())?;
+    writeln!(writer, "    格子の高さ: {}", reader.grid_height())?;
+    writeln!(writer, "    経度方向の格子数: {}", reader.number_of_h_grids())?;
+    writeln!(writer, "    緯度方向の格子数: {}", reader.number_of_v_grids())?;
+    writeln!(writer, "管理部 - 圧縮方法、観測値表")?;
+    writeln!(writer, "    圧縮方法: {}", reader.compression_method())?;
+    writeln!(writer, "    レベルの数: {}", reader.number_of_levels())?;
+    print_value_by_levels(writer, reader.value_by_levels())?;
+    writeln!(writer, "    レベルと反復数の数: {}", reader.number_of_level_repetitions())?;
+    print_level_repetitions(writer, reader.level_repetitions())?;
+
+    Ok(())
+}
+
+#[rustfmt::skip]
+fn print_data_properties<W>(
+    writer: &mut W,
+    data_properties: &[DataProperty]
+) -> std::io::Result<()>
+where
+    W: Write,
+{
+    writeln!(writer, "    記録されている観測データ")?;
+    writeln!(writer, "    date-time               elem   start-pos")?;
+    writeln!(writer, "    ----------------------------------------")?;
+    for dp in data_properties {
+        let dt_str = dp.observation_date_time.format(DATETIME_FMT).unwrap();
+        let pos_str = format!("0x{:X}", dp.data_start_position);
+        writeln!(writer, "    {:<20}{:>8}{:>12}", dt_str, dp.observation_element, pos_str)?;
+    }
+
+    Ok(())
+}
+
+fn print_value_by_levels<W>(writer: &mut W, value_by_levels: &[u16]) -> std::io::Result<()>
+where
+    W: Write,
+{
+    writeln!(writer, "    レベルごとの観測値")?;
+    writeln!(writer, "    level       value")?;
+    writeln!(writer, "    -----------------")?;
+    for (level, value) in value_by_levels.iter().enumerate() {
+        let value = if value < &u16::MAX {
+            value.to_string()
+        } else {
+            String::from("None")
+        };
+        writeln!(writer, "{:>9}{:>12}", level, value)?;
+    }
+
+    Ok(())
+}
+
+fn print_level_repetitions<W>(
+    writer: &mut W,
+    level_repetitions: &[LevelRepetition],
+) -> std::io::Result<()>
+where
+    W: Write,
+{
+    writeln!(writer, "    レベルと反復数")?;
+    writeln!(writer, "    level  repetition")?;
+    writeln!(writer, "    -----------------")?;
+    for lr in level_repetitions {
+        writeln!(writer, "{:>9}{:>12}", lr.level, lr.repetition)?;
+    }
+
+    Ok(())
+}
+
+fn print_data_part<W>(writer: &mut W, data_properties: &[DataProperty]) -> std::io::Result<()>
+where
+    W: Write,
+{
+    writeln!(writer, "データ部")?;
+    writeln!(
+        writer,
+        "date-time                 compressed    radar-status              amedas"
+    )?;
+    writeln!(
+        writer,
+        "------------------------------------------------------------------------"
+    )?;
+    for dp in data_properties {
+        let dt_str = dp.observation_date_time.format(DATETIME_FMT).unwrap();
+        let radar_str = format!("0x{:016X}", dp.radar_operation_statuses);
+        writeln!(
+            writer,
+            "{:<20}{:>16}    {:<20}{:>12}",
+            dt_str, dp.compressed_data_size, radar_str, dp.number_of_amedas
+        )?;
+    }
+
+    Ok(())
 }
