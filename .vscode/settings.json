@@ -1,8 +1,4 @@
 {
-  "cSpell.words": [
-    "amedas",
-    "amedases",
-    "datetime",
-    "rustfmt"
-  ]
+  "cSpell.words": ["amedas", "amedases", "datetime", "rustfmt"],
+  "rust-analyzer.showUnlinkedFileNotification": false
 }
