@@ -1,7 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use time::format_description::FormatItem;
 use time::macros::format_description;
@@ -17,7 +16,7 @@ const DATETIME_FMT: &[FormatItem<'_>] =
 #[derive(Debug)]
 pub struct RapReader {
     /// パス
-    path: Rc<PathBuf>,
+    path: PathBuf,
     /// コメント
     comment_part: CommentPart,
     /// データ部へのインデックス
@@ -44,10 +43,10 @@ impl RapReader {
     where
         P: AsRef<Path>,
     {
-        let path = Rc::new(path.as_ref().to_owned());
+        let path = Path::new(path.as_ref()).to_path_buf();
         let file = OpenOptions::new()
             .read(true)
-            .open(Rc::clone(&path).as_path())
+            .open(&path)
             .map_err(|e| RapReaderError::Open(format!("{e}")))?;
         let mut reader = BufReader::new(file);
         let comment_part = read_comment_part(&mut reader)?;
@@ -175,7 +174,7 @@ impl RapReader {
 
         let file = OpenOptions::new()
             .read(true)
-            .open(Rc::clone(&self.path).as_path())
+            .open(&self.path)
             .map_err(|e| RapReaderError::Open(format!("{e}")))?;
         let mut reader = BufReader::new(file);
 
@@ -887,7 +886,7 @@ pub struct LocationValue {
     pub longitude: f64,
     /// 観測値
     ///
-    /// RAPファイルに欠測値は`0xFFFF`と記録されているが`None`を返す。
+    /// 欠測値は`None`を返す。
     pub value: Option<u16>,
 }
 
@@ -1105,16 +1104,16 @@ where
 ///
 /// 格子を表現するOGC Well-known TEXT
 fn grid_wkt(longitude: f64, latitude: f64, width: f64, height: f64) -> String {
-    let width_2 = width / 2.0;
-    let height_2 = height / 2.0;
-    let min_longitude = longitude - width_2;
-    let max_longitude = longitude + width_2;
-    let max_latitude = latitude + height_2;
-    let min_latitude = latitude - height_2;
+    let half_width = width / 2.0;
+    let half_height = height / 2.0;
+    let left = longitude - half_width;
+    let right = longitude + half_width;
+    let top = latitude + half_height;
+    let bottom = latitude - half_height;
 
     // 左上、右上、右下、左下、左上の順にポリゴンの座標を並べる
     format!(
         "POLYGON(({0} {3},{2} {3},{2} {1},{0} {1}, {0} {3}))",
-        min_longitude, min_latitude, max_longitude, max_latitude
+        left, bottom, right, top
     )
 }
